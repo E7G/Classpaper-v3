@@ -269,7 +269,6 @@ int funcmain() {
 }
 
 #include <type_traits> 
-#include "res.hpp"
 
 #define WM_TRAYICON (WM_APP + 1)
 #define ID_TRAYICON 1001
@@ -281,8 +280,6 @@ int funcmain() {
 #define IDM_SETDESKTOP 1005
 
 NOTIFYICONDATA g_notifyIconData;
-
-
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -300,10 +297,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     PROCESS_INFORMATION pi;
     EnumWindowsData data;
 
-    UINT WM_TASKBARCREATED;
-    // 不要修改TaskbarCreated，这是系统任务栏自定义的消息  
-    WM_TASKBARCREATED = RegisterWindowMessage(TEXT("TaskbarCreated"));  
-
 
     switch (uMsg)
     {
@@ -315,8 +308,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             g_notifyIconData.uID = ID_TRAYICON;
             g_notifyIconData.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
             g_notifyIconData.uCallbackMessage = WM_TRAYICON;
-            g_notifyIconData.hIcon  = CreateIconFromResource(favicon_ico, favicon_ico_len, TRUE, 0x00030000);
-
+            g_notifyIconData.hIcon = LoadIcon(NULL, IDI_APPLICATION);
             lstrcpyn(g_notifyIconData.szTip, TEXT("ClassPaper"), sizeof(g_notifyIconData.szTip) / sizeof(TCHAR));
             Shell_NotifyIcon(NIM_ADD, &g_notifyIconData);
 
@@ -435,25 +427,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
                 SetForegroundWindow(hwnd);
                 TrackPopupMenu(hPopupMenu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, cursorPos.x, cursorPos.y, 0, hwnd, NULL);
                 PostMessage(hwnd, WM_NULL, 0, 0);
-            }else if (LOWORD(lParam) == WM_LBUTTONDOWN){
-                // 弹出右键菜单
-                POINT cursorPos;
-                GetCursorPos(&cursorPos);
-
-                deltab(bw_hwnd);
-
-                HMENU hPopupMenu = CreatePopupMenu();
-                AppendMenu(hPopupMenu, MF_STRING, IDM_RELOAD, TEXT("页面重载"));
-                AppendMenu(hPopupMenu, MF_STRING, IDM_SETDESKTOP, TEXT("桌面穿透"));
-                AppendMenu(hPopupMenu, MF_STRING, IDM_SETTINGS, TEXT("设置"));
-                AppendMenu(hPopupMenu, MF_STRING, IDM_RESTART, TEXT("重启"));
-                AppendMenu(hPopupMenu, MF_SEPARATOR, 0, NULL);
-                AppendMenu(hPopupMenu, MF_STRING, IDM_EXIT, TEXT("退出"));
-
-                SetForegroundWindow(hwnd);
-                TrackPopupMenu(hPopupMenu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, cursorPos.x, cursorPos.y, 0, hwnd, NULL);
-                PostMessage(hwnd, WM_NULL, 0, 0);
-
             }
 
             break;
@@ -466,17 +439,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             break;
         }
-        default:  
-        /* 
-        * 防止当Explorer.exe 崩溃以后，程序在系统系统托盘中的图标就消失 
-        * 
-        * 原理：Explorer.exe 重新载入后会重建系统任务栏。当系统任务栏建立的时候会向系统内所有 
-        * 注册接收TaskbarCreated 消息的顶级窗口发送一条消息，我们只需要捕捉这个消息，并重建系 
-        * 统托盘的图标即可。 
-        */  
-        if (uMsg == WM_TASKBARCREATED)  
-            SendMessage(hwnd, WM_CREATE, wParam, lParam);  
-        break;  
     }
 
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
