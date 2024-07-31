@@ -2,7 +2,7 @@
  仿照v2的思路使用c++重构
 
 
-```markdown
+
 # ClassPaper
 
 ---
@@ -51,4 +51,3 @@ browser_path = ""            # 浏览器可执行文件的路径（可选，留�
 ### 联系方式
 
 如有任何疑问或反馈，请随时提出问题或联系 [e7g](https://github.com/e7g/)。
-```
