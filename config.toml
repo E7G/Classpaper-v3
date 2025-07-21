@@ -1,0 +1,4 @@
+
+[default]
+  browser_path = ""
+  url = "./res/index.html"
