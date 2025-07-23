@@ -2,7 +2,7 @@
 
 // Include the WebUI header
 #include "webui.hpp"
-// #include "inicpp.hpp"
+
 #include "toml.hpp"
 
 // Include C++ STD
@@ -68,21 +68,27 @@ extern "C"
     const GUID IID_ITaskbarList3 = {0xEA1AFB91, 0x9E28, 0x4B86, {0x90, 0xE9, 0x9E, 0x9F, 0x8A, 0x5E, 0xEF, 0xAF}};
 }
 
+class ComInitializer {
+public:
+    ComInitializer() { CoInitialize(nullptr); }
+    ~ComInitializer() { CoUninitialize(); }
+};
+
 void UnregisterTab(HWND tab)
 {
-    LPVOID lp = NULL;
-    CoInitialize(lp); // 初始化COM库：没有这两句隐藏不起作用
+    ComInitializer com;
+    ITaskbarList3* taskbar;
 
-    ITaskbarList3 *taskbar;
-
-    if (!(tab))
+    if (!tab)
         return;
 
-    if (S_OK != CoCreateInstance(CLSID_TaskbarList, 0, CLSCTX_INPROC_SERVER, IID_ITaskbarList3, (void **)&taskbar))
-        return;
-    taskbar->HrInit();
-    taskbar->UnregisterTab(tab);
-    taskbar->Release();
+    if (SUCCEEDED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
+        IID_ITaskbarList3, reinterpret_cast<void**>(&taskbar))))
+    {
+        taskbar->HrInit();
+        taskbar->UnregisterTab(tab);
+        taskbar->Release();
+    }
 }
 
 BOOL ShowInTaskbar(HWND hWnd, BOOL bShow)
@@ -110,7 +116,7 @@ BOOL ShowInTaskbar(HWND hWnd, BOOL bShow)
 
 void deltab(HWND test_hwnd)
 {
-    ShowWindow(test_hwnd, SW_HIDE);
+    // ShowWindow(test_hwnd, SW_HIDE);
 
     // DWORD dwExStyle = GetWindowLong(test_hwnd, GWL_EXSTYLE);
 
@@ -120,10 +126,10 @@ void deltab(HWND test_hwnd)
 
     // dwExStyle &= ~(WS_EX_APPWINDOW);
 
-    SetWindowLong(test_hwnd, GWL_EXSTYLE, WS_EX_TOOLWINDOW);
+    // SetWindowLong(test_hwnd, GWL_EXSTYLE, WS_EX_TOOLWINDOW);
 
     // 使窗口不能获取焦点
-    SetWindowLong(test_hwnd, GWL_EXSTYLE, GetWindowLong(test_hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+    // SetWindowLong(test_hwnd, GWL_EXSTYLE, GetWindowLong(test_hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
 
     // DWORD dwStyle = GetWindowLong(test_hwnd, GWL_STYLE);
 
@@ -131,11 +137,11 @@ void deltab(HWND test_hwnd)
 
     // dwStyle |= WS_POPUP;
 
-    SetWindowLong(test_hwnd, GWL_STYLE, WS_POPUP);
+    // SetWindowLong(test_hwnd, GWL_STYLE, WS_POPUP);
 
-    ShowWindow(test_hwnd, SW_SHOW);
+    // ShowWindow(test_hwnd, SW_SHOW);
 
-    UpdateWindow(test_hwnd);
+    // UpdateWindow(test_hwnd);
 
     UnregisterTab(test_hwnd);
 
@@ -192,19 +198,58 @@ HWND bw_hwnd;
 int funcmain()
 {
 
-    // Load the INI file.
-    // inicpp::IniManager _ini("config.ini");
-
-    std::string url;
+    std::string url = "./res/index.html";
     try
     {
-        auto config = toml::parse("config.toml");
-        // 获取url值，添加默认值处理
-        std::string url = toml::find_or<std::string>(config, "default.url", "./res/index.html");
+        const auto config = toml::parse_file("config.toml");
+        url = config["default"]["url"].value_or(url);
+        
+        if (url.empty()) {
+            throw std::runtime_error("配置文件中URL不能为空");
+        }
+
+        // 检查是否为本地路径，非HTTP/HTTPS时进行路径处理
+        if (url.find("http://") == std::string::npos && url.find("https://") == std::string::npos) {
+            // 规范化处理所有res前缀
+            size_t res_pos = url.find("res/");
+            while(res_pos != std::string::npos) {
+                url.erase(res_pos, 4);
+                res_pos = url.find("res/");
+            }
+
+            std::filesystem::path base_path = std::filesystem::current_path();
+            std::filesystem::path url_path = url;
+            auto full_path = std::filesystem::weakly_canonical(base_path / "res" / url_path);
+
+            // 详细调试输出
+            // std::cout << "原始URL: " << url << std::endl;
+            // std::cout << "基础路径: " << base_path << std::endl;
+            // std::cout << "规范化路径: " << full_path << std::endl;
+            
+            // 验证路径是否在res目录内
+            if(full_path.string().find((base_path / "res").string()) != 0) {
+                throw std::runtime_error("非法路径访问: " + full_path.string());
+            }
+
+            // 设置webui根目录
+            my_window.set_root_folder((base_path / "res").string());
+            
+            // url = full_path.string();
+        }
+        
+        // 使用filesystem检查文件存在
+        if (!std::filesystem::exists(url)) {
+            std::cerr << "错误：找不到文件 " << url << std::endl;
+        }
     }
     catch (const toml::exception &e)
     {
-        std::cerr << "Config error: " << e.what() << std::endl;
+        std::cerr << "TOML解析错误: " << e.what() << std::endl;
+        return 1;
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "文件访问错误: " << e.what() << std::endl;
         return 1;
     }
 
@@ -292,7 +337,46 @@ int funcmain()
 #define IDM_EXIT 1004
 #define IDM_SETDESKTOP 1005
 
-NOTIFYICONDATA g_notifyIconData;
+class TrayIcon {
+    NOTIFYICONDATA m_data{};
+    HWND m_hwnd{};
+
+public:
+    explicit TrayIcon(HWND hwnd) : m_hwnd(hwnd)
+    {
+        m_data.cbSize = sizeof(NOTIFYICONDATA);
+        m_data.hWnd = hwnd;
+        m_data.uID = ID_TRAYICON;
+        m_data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        m_data.uCallbackMessage = WM_TRAYICON;
+        m_data.hIcon = CreateIconFromResource(favicon_ico, favicon_ico_len, TRUE, 0x00030000);
+        lstrcpyn(m_data.szTip, TEXT("ClassPaper"), sizeof(m_data.szTip) / sizeof(TCHAR));
+        Shell_NotifyIcon(NIM_ADD, &m_data);
+    }
+
+    ~TrayIcon()
+    {
+        Shell_NotifyIcon(NIM_DELETE, &m_data);
+    }
+
+    void ShowContextMenu() const
+    {
+        POINT pt;
+        GetCursorPos(&pt);
+
+        HMENU hMenu = CreatePopupMenu();
+        AppendMenu(hMenu, MF_STRING, IDM_RELOAD, TEXT("页面重载"));
+        AppendMenu(hMenu, MF_STRING, IDM_SETDESKTOP, TEXT("桌面穿透"));
+        AppendMenu(hMenu, MF_STRING, IDM_SETTINGS, TEXT("设置"));
+        AppendMenu(hMenu, MF_STRING, IDM_RESTART, TEXT("重启"));
+        AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
+        AppendMenu(hMenu, MF_STRING, IDM_EXIT, TEXT("退出"));
+
+        SetForegroundWindow(m_hwnd);
+        TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, m_hwnd, NULL);
+        DestroyMenu(hMenu);
+    }
+};
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -318,16 +402,8 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
     case WM_CREATE:
     {
-        // 创建系统托盘图标
-        g_notifyIconData.cbSize = sizeof(NOTIFYICONDATA);
-        g_notifyIconData.hWnd = hwnd;
-        g_notifyIconData.uID = ID_TRAYICON;
-        g_notifyIconData.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
-        g_notifyIconData.uCallbackMessage = WM_TRAYICON;
-        g_notifyIconData.hIcon = CreateIconFromResource(favicon_ico, favicon_ico_len, TRUE, 0x00030000);
-
-        lstrcpyn(g_notifyIconData.szTip, TEXT("ClassPaper"), sizeof(g_notifyIconData.szTip) / sizeof(TCHAR));
-        Shell_NotifyIcon(NIM_ADD, &g_notifyIconData);
+        // 初始化系统托盘
+        static TrayIcon tray(hwnd);
 
         break;
     }
@@ -427,7 +503,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             POINT cursorPos;
             GetCursorPos(&cursorPos);
 
-            deltab(bw_hwnd);
+            // deltab(bw_hwnd);
 
             HMENU hPopupMenu = CreatePopupMenu();
             AppendMenu(hPopupMenu, MF_STRING, IDM_RELOAD, TEXT("页面重载"));
@@ -447,7 +523,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             POINT cursorPos;
             GetCursorPos(&cursorPos);
 
-            deltab(bw_hwnd);
+            // deltab(bw_hwnd);
 
             HMENU hPopupMenu = CreatePopupMenu();
             AppendMenu(hPopupMenu, MF_STRING, IDM_RELOAD, TEXT("页面重载"));
