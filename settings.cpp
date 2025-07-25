@@ -345,27 +345,116 @@ void openURLInBrowser(webui::window::event *e)
         std::string url = e->get_string();
         std::cout << "[设置] 在浏览器中打开: " << url << std::endl;
 
+        // 处理本地文件路径，转换为完整的file://协议URL
+        std::string processedUrl = url;
+        if (!url.empty() && url.find("http://") != 0 && url.find("https://") != 0 && url.find("file://") != 0)
+        {
+            // 如果是相对路径，转换为绝对路径
+            if (url.find("./") == 0 || url.find("res/") == 0)
+            {
+                fs::path currentPath = fs::current_path();
+                fs::path fullPath;
+                
+                if (url.find("./") == 0)
+                {
+                    fullPath = currentPath / url.substr(2); // 移除 "./"
+                }
+                else
+                {
+                    fullPath = currentPath / url;
+                }
+                
+                // 规范化路径并转换为file://协议
+                fullPath = fs::weakly_canonical(fullPath);
+                processedUrl = "file:///" + fullPath.string();
+                
+                // 替换反斜杠为正斜杠（Windows路径处理）
+                std::replace(processedUrl.begin(), processedUrl.end(), '\\', '/');
+                
+                std::cout << "[设置] 转换后的URL: " << processedUrl << std::endl;
+            }
+        }
+
         int result = -1;
 
 #ifdef _WIN32
-        std::string command = "start \"\" \"" + url + "\"";
-        result = system(command.c_str());
+        // 使用ShellExecute替代system命令，更安全
+        HINSTANCE hResult = ShellExecuteA(NULL, "open", processedUrl.c_str(), NULL, NULL, SW_SHOWNORMAL);
+        intptr_t resultCode = reinterpret_cast<intptr_t>(hResult);
+        result = (resultCode > 32) ? 0 : -1;
+        
+        if (result != 0)
+        {
+            std::cout << "[设置] ShellExecute错误代码: " << resultCode << std::endl;
+            // 常见错误代码说明
+            switch (resultCode)
+            {
+                case 2: std::cout << "[设置] 错误: 找不到指定的文件" << std::endl; break;
+                case 3: std::cout << "[设置] 错误: 找不到指定的路径" << std::endl; break;
+                case 5: std::cout << "[设置] 错误: 访问被拒绝" << std::endl; break;
+                case 8: std::cout << "[设置] 错误: 内存不足" << std::endl; break;
+                case 31: std::cout << "[设置] 错误: 没有关联的应用程序" << std::endl; break;
+                default: std::cout << "[设置] 错误: 未知错误" << std::endl; break;
+            }
+            
+            // 尝试备用方案：使用system命令
+            std::cout << "[设置] 尝试备用方案..." << std::endl;
+            std::string command = "start \"\" \"" + processedUrl + "\"";
+            std::cout << "[设置] 执行命令: " << command << std::endl;
+            result = system(command.c_str());
+            std::cout << "[设置] 备用方案结果: " << result << std::endl;
+            
+            // 如果还是失败，尝试直接打开浏览器
+            if (result != 0)
+            {
+                std::cout << "[设置] 尝试直接启动浏览器..." << std::endl;
+                // 尝试常见浏览器路径
+                std::vector<std::string> browsers = {
+                    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+                    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+                    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+                    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"
+                };
+                
+                for (const auto& browser : browsers)
+                {
+                    if (fs::exists(browser))
+                    {
+                        std::cout << "[设置] 找到浏览器: " << browser << std::endl;
+                        std::string browserCommand = "\"" + browser + "\" \"" + processedUrl + "\"";
+                        HINSTANCE hBrowserResult = ShellExecuteA(NULL, "open", browser.c_str(), processedUrl.c_str(), NULL, SW_SHOWNORMAL);
+                        if (reinterpret_cast<intptr_t>(hBrowserResult) > 32)
+                        {
+                            result = 0;
+                            std::cout << "[设置] 浏览器启动成功" << std::endl;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
 #elif __APPLE__
-        std::string command = "open \"" + url + "\"";
+        std::string command = "open \"" + processedUrl + "\"";
         result = system(command.c_str());
 #else
-        std::string command = "xdg-open \"" + url + "\"";
+        std::string command = "xdg-open \"" + processedUrl + "\"";
         result = system(command.c_str());
 #endif
 
         bool success = (result == 0);
         std::cout << "[设置] 打开浏览器" << (success ? "成功" : "失败") << std::endl;
-        e->return_bool(success);
+        
+        // 返回JSON格式以兼容前端
+        std::string response = success ? 
+            R"({"success": true})" : 
+            R"({"success": false, "error": "Failed to open browser"})";
+        e->return_string(response);
     }
     catch (const std::exception &ex)
     {
         std::cout << "[设置] 打开浏览器异常: " << ex.what() << std::endl;
-        e->return_bool(false);
+        std::string error_response = R"({"success": false, "error": ")" + std::string(ex.what()) + R"("})";
+        e->return_string(error_response);
     }
 }
 
@@ -404,50 +493,227 @@ void getConfig(webui::window::event *e)
 
 void selectFile(webui::window::event *e)
 {
-    OPENFILENAMEA ofn;
-    CHAR szFile[260] = {0};
-
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = NULL;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "All Files\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-
-    if (GetOpenFileNameA(&ofn))
+    try
     {
-        e->return_string(ofn.lpstrFile);
+        OPENFILENAMEA ofn;
+        CHAR szFile[260] = {0};
+
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = NULL;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = "HTML Files\0*.html;*.htm\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrTitle = "选择页面文件";
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+        if (GetOpenFileNameA(&ofn))
+        {
+            std::cout << "[设置] 文件选择成功: " << ofn.lpstrFile << std::endl;
+            std::string response = R"({"success": true, "file": ")" + std::string(ofn.lpstrFile) + R"("})";
+            e->return_string(response);
+        }
+        else
+        {
+            DWORD error = CommDlgExtendedError();
+            if (error == 0)
+            {
+                // 用户取消选择
+                std::cout << "[设置] 用户取消文件选择" << std::endl;
+                e->return_string(R"({"success": false, "cancelled": true})");
+            }
+            else
+            {
+                std::cout << "[设置] 文件选择失败，错误代码: " << error << std::endl;
+                e->return_string(R"({"success": false, "error": "File selection failed"})");
+            }
+        }
     }
-    else
+    catch (const std::exception &ex)
     {
-        e->return_string(""); // 用户取消选择
+        std::cout << "[设置] 文件选择异常: " << ex.what() << std::endl;
+        e->return_string(R"({"success": false, "error": "Exception occurred"})");
     }
 }
 
 void selectBrowser(webui::window::event *e)
 {
-    OPENFILENAMEA ofn;
-    CHAR szFile[260] = {0};
-
-    ZeroMemory(&ofn, sizeof(ofn));
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = NULL;
-    ofn.lpstrFile = szFile;
-    ofn.nMaxFile = sizeof(szFile);
-    ofn.lpstrFilter = "Executable Files\0*.exe\0All Files\0*.*\0";
-    ofn.nFilterIndex = 1;
-    ofn.lpstrTitle = "选择浏览器程序";
-    ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
-
-    if (GetOpenFileNameA(&ofn))
+    try
     {
-        e->return_string(ofn.lpstrFile);
+        OPENFILENAMEA ofn;
+        CHAR szFile[260] = {0};
+
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = NULL;
+        ofn.lpstrFile = szFile;
+        ofn.nMaxFile = sizeof(szFile);
+        ofn.lpstrFilter = "Executable Files\0*.exe\0All Files\0*.*\0";
+        ofn.nFilterIndex = 1;
+        ofn.lpstrTitle = "选择浏览器程序";
+        ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+
+        if (GetOpenFileNameA(&ofn))
+        {
+            std::cout << "[设置] 浏览器选择成功: " << ofn.lpstrFile << std::endl;
+            std::string response = R"({"success": true, "browser": ")" + std::string(ofn.lpstrFile) + R"("})";
+            e->return_string(response);
+        }
+        else
+        {
+            DWORD error = CommDlgExtendedError();
+            if (error == 0)
+            {
+                // 用户取消选择
+                std::cout << "[设置] 用户取消浏览器选择" << std::endl;
+                e->return_string(R"({"success": false, "cancelled": true})");
+            }
+            else
+            {
+                std::cout << "[设置] 浏览器选择失败，错误代码: " << error << std::endl;
+                e->return_string(R"({"success": false, "error": "Browser selection failed"})");
+            }
+        }
     }
-    else
+    catch (const std::exception &ex)
     {
-        e->return_string("");
+        std::cout << "[设置] 浏览器选择异常: " << ex.what() << std::endl;
+        e->return_string(R"({"success": false, "error": "Exception occurred"})");
+    }
+}
+
+// 前端兼容性函数 - saveSettings (简化版saveConfig)
+void saveSettings(webui::window::event *e)
+{
+    try
+    {
+        std::string url = e->get_string(0);
+        std::string browser_path = e->get_string(1);
+        
+        std::cout << "[设置] 保存设置: URL=" << url << ", BrowserPath=" << browser_path << std::endl;
+
+        // 保存 TOML 配置
+        if (!config_manager.saveTomlConfig(browser_path, url))
+        {
+            e->return_string(R"({"success": false, "error": "Failed to save TOML config"})");
+            return;
+        }
+
+        std::cout << "[设置] 设置已保存" << std::endl;
+        e->return_string(R"({"success": true})");
+    }
+    catch (const std::exception &ex)
+    {
+        std::cout << "[设置] 保存设置失败: " << ex.what() << std::endl;
+        e->return_string(R"({"success": false, "error": ")" + std::string(ex.what()) + R"("})");
+    }
+}
+
+// 前端兼容性函数 - loadSettings (简化版readConfig)
+void loadSettings(webui::window::event *e)
+{
+    try
+    {
+        std::cout << "[设置] 加载设置..." << std::endl;
+
+        // 读取 TOML 配置
+        auto toml_content = config_manager.loadTomlConfig();
+        auto config = toml::parse_str(toml_content);
+
+        std::string browser_path = toml::find_or(config, "default", "browser_path", std::string(""));
+        std::string url = toml::find_or(config, "default", "url", std::string("./res/index.html"));
+
+        std::cout << "[设置] 加载到设置: URL=" << url << ", BrowserPath=" << browser_path << std::endl;
+
+        // 构建简化的 JSON 响应
+        std::string response = R"({
+            "success": true,
+            "url": ")" + url + R"(",
+            "browser_path": ")" + browser_path + R"("
+        })";
+
+        e->return_string(response);
+    }
+    catch (const std::exception &ex)
+    {
+        std::cout << "[设置] 加载设置失败: " << ex.what() << std::endl;
+        std::string error_response = R"({"success": false, "error": ")" + std::string(ex.what()) + R"("})";
+        e->return_string(error_response);
+    }
+}
+
+// 调试函数 - 帮助诊断浏览器打开问题
+void debugOpenBrowser(webui::window::event *e)
+{
+    try
+    {
+        std::string url = e->get_string();
+        std::cout << "[调试] 开始调试浏览器打开功能..." << std::endl;
+        std::cout << "[调试] 输入URL: " << url << std::endl;
+        
+        // 检查当前工作目录
+        fs::path currentPath = fs::current_path();
+        std::cout << "[调试] 当前工作目录: " << currentPath << std::endl;
+        
+        // 检查文件是否存在
+        if (!url.empty() && url.find("http://") != 0 && url.find("https://") != 0)
+        {
+            fs::path filePath;
+            if (url.find("./") == 0)
+            {
+                filePath = currentPath / url.substr(2);
+            }
+            else if (url.find("res/") == 0)
+            {
+                filePath = currentPath / url;
+            }
+            else
+            {
+                filePath = currentPath / url;
+            }
+            
+            std::cout << "[调试] 检查文件路径: " << filePath << std::endl;
+            std::cout << "[调试] 文件存在: " << (fs::exists(filePath) ? "是" : "否") << std::endl;
+            
+            if (fs::exists(filePath))
+            {
+                std::cout << "[调试] 文件大小: " << fs::file_size(filePath) << " 字节" << std::endl;
+            }
+        }
+        
+        // 检查可用的浏览器
+        std::vector<std::string> browsers = {
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+            "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+            "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+            "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+            "C:\\Program Files (x86)\\Mozilla Firefox\\firefox.exe"
+        };
+        
+        std::cout << "[调试] 检查可用浏览器:" << std::endl;
+        for (const auto& browser : browsers)
+        {
+            bool exists = fs::exists(browser);
+            std::cout << "[调试] " << browser << ": " << (exists ? "存在" : "不存在") << std::endl;
+        }
+        
+        // 构建调试信息JSON
+        std::string debugInfo = R"({
+            "success": true,
+            "currentPath": ")" + currentPath.string() + R"(",
+            "url": ")" + url + R"(",
+            "message": "Debug information collected"
+        })";
+        
+        e->return_string(debugInfo);
+    }
+    catch (const std::exception &ex)
+    {
+        std::cout << "[调试] 调试异常: " << ex.what() << std::endl;
+        std::string error_response = R"({"success": false, "error": ")" + std::string(ex.what()) + R"("})";
+        e->return_string(error_response);
     }
 }
 
@@ -462,61 +728,80 @@ int main()
     // 绑定所有需要的回调函数 - 参考 main.go 中的绑定
     std::cout << "[设置] 开始绑定函数..." << std::endl;
 
+    // 配置管理相关函数
     settings_window.bind("readConfig", readConfig);
     settings_window.bind("saveConfig", saveConfig);
+    settings_window.bind("getConfig", getConfig);
+    
+    // 文件操作相关函数
     settings_window.bind("writeFile", writeFile);
     settings_window.bind("readFile", readFile);
     settings_window.bind("readDir", readDir);
+    
+    // 壁纸管理相关函数
     settings_window.bind("scanWallpaperDir", scanWallpaperDir);
+    
+    // 系统操作相关函数
     settings_window.bind("reloadMainWindow", reloadMainWindow);
     settings_window.bind("openBrowser", openURLInBrowser);
-    settings_window.bind("getConfig", getConfig); // 额外的兼容性函数
+    settings_window.bind("openURLInBrowser", openURLInBrowser); // 前端可能使用这个名字
+    
+    // 文件选择相关函数
     settings_window.bind("selectFile", selectFile);
     settings_window.bind("selectBrowser", selectBrowser);
+    
+    // 前端兼容性函数（settings.html中使用的函数名）
+    settings_window.bind("saveSettings", saveSettings);
+    settings_window.bind("loadSettings", loadSettings);
+    
+    // 调试函数
+    settings_window.bind("debugOpenBrowser", debugOpenBrowser);
 
     std::cout << "[设置] 函数绑定完成" << std::endl;
 
     // 设置根目录并显示窗口
-    // settings_window.set_size(800, 600); // 设置初始窗口尺寸
     settings_window.set_root_folder("res/");
+    settings_window.set_size(800, 600); // 设置窗口尺寸
+    settings_window.set_position(100, 100); // 设置窗口位置
     settings_window.show("settings.html");
 
-    // 等待窗口加载完成（最多等待1秒）
+    // 等待窗口加载完成（最多等待2秒）
     std::cout << "[设置] 开始等待窗口准备就绪..." << std::endl;
-    for (int i = 0; i < 10; ++i)
+    for (int i = 0; i < 20; ++i)
     {
         if (settings_window.is_shown())
         {
             std::cout << "[设置] 窗口已就绪 (第 " << i+1 << " 次检测)" << std::endl;
             break;
         }
-        std::cout << "[设置] 等待窗口准备就绪 (" << i + 1 << "/10) 当前状态: " 
+        std::cout << "[设置] 等待窗口准备就绪 (" << i + 1 << "/20) 当前状态: " 
                   << (settings_window.is_shown() ? "已显示" : "未显示") << std::endl;
         Sleep(100);
     }
     
-    // 通过 JavaScript 设置窗口标题并验证结果
-    // std::cout << "[设置] 开始设置窗口标题..." << std::endl;
-    // char scriptResult[256] = {0}; // 初始化结果缓冲区
-    // bool titleSetSuccess = settings_window.script(R"(
-    //     try {
-    //         document.title = 'ClassPaper Settings';
-    //         webui.setTitle('ClassPaper Settings');
-    //         window._titleSetSuccess = true;
-    //         JSON.stringify({success: true});
-    //     } catch(e) {
-    //         console.error('标题设置失败:', e);
-    //         window._titleSetSuccess = false;
-    //         JSON.stringify({success: false, error: e.message});
-    //     }
-    // )", 1000, scriptResult, sizeof(scriptResult)); // 完整参数：代码/超时/缓冲区/大小
+    // 验证窗口状态
+    if (settings_window.is_shown())
+    {
+        std::cout << "[设置] 窗口成功显示，开始设置窗口属性..." << std::endl;
+        
+        // 设置窗口标题
+        settings_window.run("document.title = 'ClassPaper 设置';");
+        
+        // 确保窗口尺寸正确
+        settings_window.set_size(800, 600);
+        
+        std::cout << "[设置] 窗口属性设置完成" << std::endl;
+    }
+    else
+    {
+        std::cout << "[警告] 窗口可能未正确显示，但继续运行..." << std::endl;
+    }
+    
+    // 短暂延迟确保窗口完全加载
+    Sleep(500);
 
-    // std::cout << "[设置] 标题设置" << (titleSetSuccess ? "成功" : "失败")
-    //           << " 脚本返回: " << scriptResult << std::endl;
-
-    Sleep(800);
-
-    settings_window.set_size(800, 600); // 强制设置窗口尺寸
+    // 最终确认窗口尺寸
+    settings_window.set_size(800, 600);
 
 // #ifdef _WIN32
 //     // 获取窗口句柄后立即设置样式

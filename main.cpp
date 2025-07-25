@@ -60,8 +60,17 @@ public:
             ShowWindow(workerw, SW_HIDE);
         }
 
-        // 设置为桌面子窗口
-        SetParent(appHwnd, progman);
+        // 设置为桌面子窗口 - 增强兼容性
+        HWND parentResult = SetParent(appHwnd, progman);
+        if (!parentResult) {
+            std::cerr << "[壁纸] SetParent失败，错误代码: " << GetLastError() << std::endl;
+            return false;
+        }
+        
+        // 确保窗口在桌面层级正确显示
+        SetWindowPos(appHwnd, HWND_BOTTOM, 0, 0, 0, 0, 
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        
         return true;
     }
 };
@@ -572,39 +581,141 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
-// 在 WinMain 函数中调整初始化顺序
+// 新版本Windows兼容性函数
+void InitializeModernWindowsSupport()
+{
+    // 设置DPI感知 - 支持高DPI显示器
+    typedef BOOL(WINAPI* SetProcessDPIAwareFunc)();
+    typedef HRESULT(WINAPI* SetProcessDpiAwarenessFunc)(int);
+    typedef HRESULT(WINAPI* SetProcessDpiAwarenessContextFunc)(void*);
+    
+    HMODULE user32 = GetModuleHandle(TEXT("user32.dll"));
+    HMODULE shcore = LoadLibrary(TEXT("shcore.dll"));
+    
+    // 尝试使用最新的DPI感知API
+    if (user32) {
+        SetProcessDpiAwarenessContextFunc setDpiAwarenessContext = 
+            (SetProcessDpiAwarenessContextFunc)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+        if (setDpiAwarenessContext) {
+            // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
+            setDpiAwarenessContext((void*)-4);
+            std::cout << "[系统] 已启用Per-Monitor DPI Aware V2" << std::endl;
+        }
+    }
+    
+    // 备用方案：使用较旧的API
+    if (shcore) {
+        SetProcessDpiAwarenessFunc setDpiAwareness = 
+            (SetProcessDpiAwarenessFunc)GetProcAddress(shcore, "SetProcessDpiAwareness");
+        if (setDpiAwareness) {
+            // PROCESS_PER_MONITOR_DPI_AWARE = 2
+            setDpiAwareness(2);
+            std::cout << "[系统] 已启用Per-Monitor DPI Aware" << std::endl;
+        }
+    }
+    
+    // 最后备用方案
+    if (user32) {
+        SetProcessDPIAwareFunc setDpiAware = 
+            (SetProcessDPIAwareFunc)GetProcAddress(user32, "SetProcessDPIAware");
+        if (setDpiAware) {
+            setDpiAware();
+            std::cout << "[系统] 已启用基础DPI感知" << std::endl;
+        }
+    }
+    
+    if (shcore) {
+        FreeLibrary(shcore);
+    }
+}
+
+// 在 WinMain 函数中调整初始化顺序 - 新版本Windows兼容性改进
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    // 注册窗口类
-    WNDCLASS wc = {0};
+    // 初始化现代Windows支持
+    InitializeModernWindowsSupport();
+    // 注册窗口类 - 使用WNDCLASSEX提高兼容性
+    WNDCLASSEX wc = {};
+    wc.cbSize = sizeof(WNDCLASSEX);
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = TEXT("TrayMenu");
-    RegisterClass(&wc);
+    wc.style = CS_OWNDC;  // 使用CS_OWNDC样式提高新版本Windows兼容性
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);  // 添加默认光标
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);  // 添加背景画刷
+    
+    if (!RegisterClassEx(&wc)) {
+        std::cerr << "[错误] 窗口类注册失败! 错误代码: " << GetLastError() << std::endl;
+        return 1;
+    }
 
     // 注册窗口类后添加
     std::cout << "[系统] 窗口类注册完成，开始创建消息窗口..." << std::endl;
-    HWND hWnd = CreateWindowEx(0, wc.lpszClassName, TEXT(""), 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    
+    // 创建窗口 - 使用改进的扩展样式提高兼容性
+    HWND hWnd = CreateWindowEx(
+        WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,  // 设置工具窗口和无激活样式
+        wc.lpszClassName, 
+        TEXT("ClassPaper Background Service"), 
+        0,  // 无标准窗口样式
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        CW_USEDEFAULT, CW_USEDEFAULT,
+        NULL, NULL, hInstance, NULL
+    );
+    
     if (!hWnd) {
         std::cerr << "[错误] 无法创建消息窗口! 错误代码: " << GetLastError() << std::endl;
         return 1;
     }
     std::cout << "[系统] 消息窗口已创建，句柄: " << hWnd << std::endl;
 
-    // 在独立线程中运行主逻辑
-    std::thread mainThread([](){
-        funcmain();
+    // 在独立线程中运行主逻辑 - 改进线程管理
+    std::cout << "[系统] 启动主逻辑线程..." << std::endl;
+    std::thread mainThread([hWnd](){
+        try {
+            funcmain();
+        } catch (const std::exception& e) {
+            std::cerr << "[错误] 主逻辑线程异常: " << e.what() << std::endl;
+            // 通知主窗口退出
+            PostMessage(hWnd, WM_QUIT, 0, 0);
+        } catch (...) {
+            std::cerr << "[错误] 主逻辑线程发生未知异常" << std::endl;
+            PostMessage(hWnd, WM_QUIT, 0, 0);
+        }
     });
     mainThread.detach();  // 分离线程避免阻塞消息循环
 
-    // 立即进入消息循环
-    MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0))
+    std::cout << "[系统] 主逻辑线程已启动，进入消息循环..." << std::endl;
+
+    // 改进的消息循环 - 增强新版本Windows兼容性
+    MSG msg = {};
+    BOOL bRet;
+    while ((bRet = GetMessage(&msg, NULL, 0, 0)) != 0)
     {
+        if (bRet == -1) {
+            // 处理GetMessage错误
+            std::cerr << "[错误] GetMessage失败! 错误代码: " << GetLastError() << std::endl;
+            break;
+        }
+        
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
-    webui::exit();
+    std::cout << "[系统] 消息循环结束，开始清理资源..." << std::endl;
+    
+    // 清理资源
+    try {
+        webui::exit();
+        std::cout << "[系统] WebUI资源已清理" << std::endl;
+    } catch (...) {
+        std::cerr << "[警告] WebUI清理时发生异常" << std::endl;
+    }
+    
+    // 注销窗口类
+    UnregisterClass(TEXT("TrayMenu"), hInstance);
+    std::cout << "[系统] 窗口类已注销" << std::endl;
+    
+    std::cout << "[系统] 程序正常退出" << std::endl;
     return static_cast<int>(msg.wParam);
 }

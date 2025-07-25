@@ -648,7 +648,10 @@
                     <div class="help-text">如果系统无法自动找到Chrome浏览器，请手动指定路径</div>
                 </div>
                 <!-- 新增调试按钮 -->
-                <button class="secondary" onclick="openInBrowser()">在浏览器中打开调试</button>
+                <div style="display: flex; gap: 10px;">
+                    <button class="secondary" onclick="openInBrowser()">在浏览器中打开调试</button>
+                    <button class="secondary" onclick="debugBrowserOpen()">调试浏览器功能</button>
+                </div>
             </div>
         </div>
 
@@ -1454,11 +1457,62 @@ const sth = CONFIG.sth;`;
             try {
                 await waitForBinding('openURLInBrowser');
                 const result = await window.openURLInBrowser(url);
-                showStatus(result ? '已在浏览器中打开页面' : '打开浏览器失败',
-                    result ? 'success' : 'error');
+                
+                // 解析JSON响应
+                let success = false;
+                let message = '';
+                
+                if (typeof result === 'string') {
+                    try {
+                        const parsed = JSON.parse(result);
+                        success = parsed.success;
+                        message = parsed.error || '操作完成';
+                    } catch {
+                        success = result === 'true' || result === true;
+                        message = success ? '操作成功' : '操作失败';
+                    }
+                } else {
+                    success = result === true;
+                    message = success ? '操作成功' : '操作失败';
+                }
+                
+                showStatus(success ? '已在浏览器中打开页面' : '打开浏览器失败: ' + message,
+                    success ? 'success' : 'error');
             } catch (e) {
                 console.error('打开浏览器失败:', e);
                 showStatus('打开浏览器失败: ' + e.message, 'error');
+            }
+        }
+
+        // 调试浏览器功能
+        async function debugBrowserOpen() {
+            const url = document.getElementById('url').value.trim() || './res/index.html';
+            
+            try {
+                await waitForBinding('debugOpenBrowser');
+                const result = await window.debugOpenBrowser(url);
+                
+                console.log('调试结果:', result);
+                
+                if (typeof result === 'string') {
+                    try {
+                        const parsed = JSON.parse(result);
+                        if (parsed.success) {
+                            showStatus('调试信息已输出到控制台，请查看程序日志', 'success');
+                            console.log('当前路径:', parsed.currentPath);
+                            console.log('URL:', parsed.url);
+                        } else {
+                            showStatus('调试失败: ' + parsed.error, 'error');
+                        }
+                    } catch {
+                        showStatus('调试完成，请查看程序日志', 'success');
+                    }
+                } else {
+                    showStatus('调试完成，请查看程序日志', 'success');
+                }
+            } catch (e) {
+                console.error('调试失败:', e);
+                showStatus('调试失败: ' + e.message, 'error');
             }
         }
 
