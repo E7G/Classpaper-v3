@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ClassPaper 设置</title>
+    <script src="/webui.js"></script>
     <script src="config/config.js"></script>
     <link rel="icon" type="image/x-icon" href="favicon.ico">
     <style>
@@ -632,12 +633,18 @@
                 </div>
         <div class="form-group">
                     <label for="url">壁纸页面URL</label>
-            <input type="text" id="url" placeholder="输入页面URL或本地文件路径">
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="url" placeholder="输入页面URL或本地文件路径" style="flex: 1;">
+                        <button class="secondary" onclick="selectFileForUrl()">选择文件</button>
+                    </div>
                     <div class="help-text">可以是网页地址或本地壁纸文件夹路径</div>
                 </div>
                 <div class="form-group">
                     <label for="browser">浏览器路径（可选）</label>
-                    <input type="text" id="browser" placeholder="输入Chrome浏览器路径">
+                    <div style="display: flex; gap: 10px;">
+                        <input type="text" id="browser" placeholder="输入Chrome浏览器路径" style="flex: 1;">
+                        <button class="secondary" onclick="selectBrowserForPath()">选择浏览器</button>
+                    </div>
                     <div class="help-text">如果系统无法自动找到Chrome浏览器，请手动指定路径</div>
                 </div>
                 <!-- 新增调试按钮 -->
@@ -1455,8 +1462,225 @@ const sth = CONFIG.sth;`;
             }
         }
 
-        // 页面加载时读取配置
-        document.addEventListener('DOMContentLoaded', handleReset);
+        // WebUI 兼容层 - 将 WebUI 函数绑定到 window 对象
+        function setupWebUICompatibility() {
+            // 等待 WebUI 就绪
+            if (typeof webui === 'undefined') {
+                setTimeout(setupWebUICompatibility, 100);
+                return;
+            }
+
+            // 绑定配置相关函数
+            window.readConfig = async function() {
+                try {
+                    // 检查 WebSocket 连接状态
+                    if (typeof webui === 'undefined') {
+                        throw new Error('WebUI not ready');
+                    }
+                    
+                    const result = await webui.call('getConfig');
+                    const webuiConfig = JSON.parse(result);
+                    
+                    // 返回 handleReset 期望的格式
+                    const configData = {
+                        Default: {
+                            URL: webuiConfig.url || './res/index.html',
+                            BrowserPath: webuiConfig.browser_path || ''
+                        }
+                    };
+                    
+                    console.log('从 WebUI 读取配置:', configData);
+                    return configData;
+                } catch (error) {
+                    console.error('读取配置失败:', error);
+                    
+                    // 如果是 WebSocket 连接问题，返回默认配置但不报错
+                    if (error.message.includes('WebSocket is not connected') || error.message.includes('WebUI not ready')) {
+                        console.log('WebSocket 未连接，使用默认配置');
+                        const defaultConfig = {
+                            Default: {
+                                URL: './res/index.html',
+                                BrowserPath: ''
+                            }
+                        };
+                        return defaultConfig;
+                    }
+                    
+                    // 其他错误，返回默认配置
+                    return {
+                        Default: {
+                            URL: './res/index.html',
+                            BrowserPath: ''
+                        }
+                    };
+                }
+            };
+
+            window.saveConfig = async function(configStr) {
+                try {
+                    const config = JSON.parse(configStr);
+                    
+                    // 从表单获取当前值
+                    const urlField = document.getElementById('url');
+                    const browserField = document.getElementById('browser');
+                    
+                    const url = urlField ? urlField.value : './res/index.html';
+                    const browser_path = browserField ? browserField.value : '';
+                    
+                    console.log('保存配置到 WebUI:', { url, browser_path });
+                    
+                    const result = await webui.call('saveSettings', url, browser_path);
+                    const response = JSON.parse(result);
+                    return response.success;
+                } catch (error) {
+                    console.error('保存配置失败:', error);
+                    return false;
+                }
+            };
+
+            window.openURLInBrowser = async function(url) {
+                try {
+                    const result = await webui.call('openBrowser', url);
+                    const response = JSON.parse(result);
+                    return response.success;
+                } catch (error) {
+                    console.error('打开浏览器失败:', error);
+                    return false;
+                }
+            };
+
+            // 文件选择功能
+            window.selectFile = async function() {
+                try {
+                    const result = await webui.call('selectFile');
+                    const response = JSON.parse(result);
+                    return response.success ? response.file : null;
+                } catch (error) {
+                    console.error('选择文件失败:', error);
+                    return null;
+                }
+            };
+
+            // 浏览器选择功能
+            window.selectBrowser = async function() {
+                try {
+                    const result = await webui.call('selectBrowser');
+                    const response = JSON.parse(result);
+                    return response.success ? response.browser : null;
+                } catch (error) {
+                    console.error('选择浏览器失败:', error);
+                    return null;
+                }
+            };
+
+            // 模拟其他可能需要的函数
+            window.writeFile = async function(path, content) {
+                console.log('writeFile 调用:', path, content);
+                return true; // 简单返回成功
+            };
+
+            window.reloadMainWindow = async function() {
+                console.log('reloadMainWindow 调用');
+                return true;
+            };
+
+            window.scanWallpaperDir = async function() {
+                console.log('scanWallpaperDir 调用');
+                return []; // 返回空数组
+            };
+
+            console.log('WebUI 兼容层已设置');
+        }
+
+        // 文件选择按钮处理函数
+        async function selectFileForUrl() {
+            try {
+                const file = await window.selectFile();
+                if (file) {
+                    document.getElementById('url').value = file;
+                    showStatus('文件选择成功', 'success');
+                }
+            } catch (error) {
+                console.error('选择文件失败:', error);
+                showStatus('选择文件失败: ' + error.message, 'error');
+            }
+        }
+
+        // 浏览器选择按钮处理函数
+        async function selectBrowserForPath() {
+            try {
+                const browser = await window.selectBrowser();
+                if (browser) {
+                    document.getElementById('browser').value = browser;
+                    showStatus('浏览器选择成功', 'success');
+                }
+            } catch (error) {
+                console.error('选择浏览器失败:', error);
+                showStatus('选择浏览器失败: ' + error.message, 'error');
+            }
+        }
+
+        // 等待 WebUI 连接的函数
+        function waitForWebUIConnection(callback, maxRetries = 20) {
+            let retries = 0;
+            
+            function checkConnection() {
+                if (typeof webui !== 'undefined') {
+                    try {
+                        // 尝试一个简单的调用来测试连接
+                        webui.call('getConfig').then(() => {
+                            console.log('WebUI 连接已建立');
+                            callback();
+                        }).catch((error) => {
+                            if (error.message.includes('WebSocket is not connected') && retries < maxRetries) {
+                                retries++;
+                                console.log(`WebSocket 未连接，重试 ${retries}/${maxRetries}`);
+                                setTimeout(checkConnection, 500);
+                            } else {
+                                console.log('WebUI 连接失败，使用默认配置');
+                                callback();
+                            }
+                        });
+                    } catch (error) {
+                        if (retries < maxRetries) {
+                            retries++;
+                            setTimeout(checkConnection, 500);
+                        } else {
+                            console.log('WebUI 连接超时，使用默认配置');
+                            callback();
+                        }
+                    }
+                } else {
+                    if (retries < maxRetries) {
+                        retries++;
+                        setTimeout(checkConnection, 200);
+                    } else {
+                        console.log('WebUI 未加载，使用默认配置');
+                        callback();
+                    }
+                }
+            }
+            
+            checkConnection();
+        }
+
+        // 页面加载时设置兼容层并读取配置
+        document.addEventListener('DOMContentLoaded', function() {
+            setupWebUICompatibility();
+            
+            // 确保 CONFIG 对象已加载
+            if (typeof CONFIG === 'undefined') {
+                console.error('CONFIG 对象未定义，请检查 config.js 是否正确加载');
+                return;
+            }
+            
+            console.log('CONFIG 对象已加载:', CONFIG);
+            
+            // 等待 WebUI 连接后再调用 handleReset
+            waitForWebUIConnection(function() {
+                handleReset();
+            });
+        });
     </script>
 </body>
 

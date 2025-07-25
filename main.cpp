@@ -10,147 +10,164 @@
 #include <stdexcept>
 #include <string>
 #include <random>
+#include <filesystem>
 
-#include <stdio.h>
-#include <stdlib.h>
+// Windows headers
 #include <windows.h>
 #include <tchar.h>
 #include <Shobjidl.h>
-
-#include <Windows.h>
 #include <shellapi.h>
 
-HWND workerw = NULL; // 第二个WorkerW窗口句柄
-
-inline BOOL CALLBACK EnumWindowsProc1(HWND handle, LPARAM lparam)
+// 壁纸设置相关
+class WallpaperManager
 {
-    // 获取第一个WorkerW窗口
-    HWND defview = FindWindowEx(handle, 0, _T("SHELLDLL_DefView"), NULL);
+private:
+    HWND workerw = nullptr;
 
-    if (defview != NULL) // 找到第一个WorkerW窗口
+    static BOOL CALLBACK FindWorkerWProc(HWND handle, LPARAM lparam)
     {
-        // 获取第二个WorkerW窗口的窗口句柄
-        workerw = FindWindowEx(0, handle, _T("WorkerW"), 0);
+        auto *manager = reinterpret_cast<WallpaperManager *>(lparam);
+        HWND defview = FindWindowEx(handle, nullptr, _T("SHELLDLL_DefView"), nullptr);
+
+        if (defview)
+        {
+            manager->workerw = FindWindowEx(nullptr, handle, _T("WorkerW"), nullptr);
+            return FALSE; // 停止枚举
+        }
+        return TRUE;
     }
-    return true;
-}
 
-// 参数myAppHwnd为你开发的窗口程序的窗口句柄
-void SetDesktop(HWND myAppHwnd)
-{
-    int result;
-    HWND windowHandle = FindWindow(_T("Progman"), NULL);
-    SendMessageTimeout(windowHandle, 0x052c, 0, 0, SMTO_NORMAL, 0x3e8, (PDWORD_PTR)&result);
+public:
+    bool SetAsWallpaper(HWND appHwnd)
+    {
+        if (!appHwnd)
+            return false;
 
-    // 枚举窗口
-    EnumWindows(EnumWindowsProc1, (LPARAM)NULL);
+        // 获取Progman窗口
+        HWND progman = FindWindow(_T("Progman"), nullptr);
+        if (!progman)
+            return false;
 
-    // 隐藏第二个WorkerW窗口，当以Progman为父窗口时需要对其进行隐藏，
-    // 不然程序窗口会被第二个WorkerW覆盖
-    ShowWindow(workerw, SW_HIDE);
+        // 发送消息创建WorkerW窗口
+        DWORD_PTR result;
+        SendMessageTimeout(progman, 0x052c, 0, 0, SMTO_NORMAL, 1000, &result);
 
-    SetParent(myAppHwnd, windowHandle);
-}
+        // 查找WorkerW窗口
+        EnumWindows(FindWorkerWProc, reinterpret_cast<LPARAM>(this));
 
+        if (workerw)
+        {
+            ShowWindow(workerw, SW_HIDE);
+        }
+
+        // 设置为桌面子窗口
+        SetParent(appHwnd, progman);
+        return true;
+    }
+};
+
+// COM GUIDs for taskbar operations
 extern "C"
 {
     const GUID CLSID_TaskbarList = {0x56FDF344, 0xFD6D, 0x11D0, {0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90}};
     const GUID IID_ITaskbarList = {0x56FDF342, 0xFD6D, 0x11D0, {0x95, 0x8A, 0x00, 0x60, 0x97, 0xC9, 0xA0, 0x90}};
-}
-
-extern "C"
-{
     const GUID IID_ITaskbarList2 = {0x602D4995, 0xB13A, 0x429b, {0xA6, 0x6E, 0x19, 0x35, 0xE4, 0x4F, 0x43, 0x17}};
-}
-
-extern "C"
-{
     const GUID IID_ITaskbarList3 = {0xEA1AFB91, 0x9E28, 0x4B86, {0x90, 0xE9, 0x9E, 0x9F, 0x8A, 0x5E, 0xEF, 0xAF}};
 }
 
-class ComInitializer {
+class ComInitializer
+{
 public:
     ComInitializer() { CoInitialize(nullptr); }
     ~ComInitializer() { CoUninitialize(); }
 };
 
-void UnregisterTab(HWND tab)
+// 窗口管理器
+class WindowManager
 {
+private:
     ComInitializer com;
-    ITaskbarList3* taskbar;
 
-    if (!tab)
-        return;
-
-    if (SUCCEEDED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
-        IID_ITaskbarList3, reinterpret_cast<void**>(&taskbar))))
+    template <typename T>
+    bool CreateTaskbarInterface(T **ppInterface, const GUID &iid)
     {
-        taskbar->HrInit();
-        taskbar->UnregisterTab(tab);
-        taskbar->Release();
-    }
-}
-
-BOOL ShowInTaskbar(HWND hWnd, BOOL bShow)
-{
-    LPVOID lp = NULL;
-    CoInitialize(lp); // 初始化COM库：没有这两句隐藏不起作用
-
-    HRESULT hr;
-    ITaskbarList *pTaskbarList;
-    hr = CoCreateInstance(CLSID_TaskbarList, NULL, CLSCTX_INPROC_SERVER,
-                          IID_ITaskbarList, (void **)&pTaskbarList);
-    if (SUCCEEDED(hr))
-    {
-        pTaskbarList->HrInit();
-        if (bShow)
-            pTaskbarList->AddTab(hWnd);
-        else
-            pTaskbarList->DeleteTab(hWnd);
-        pTaskbarList->Release();
-        return TRUE;
+        return SUCCEEDED(CoCreateInstance(CLSID_TaskbarList, nullptr, CLSCTX_INPROC_SERVER,
+                                          iid, reinterpret_cast<void **>(ppInterface)));
     }
 
-    return FALSE;
-}
+public:
+    // 从任务栏隐藏窗口（不影响托盘图标）
+    bool HideFromTaskbar(HWND hwnd)
+    {
+        if (!hwnd)
+            return false;
 
-void deltab(HWND test_hwnd)
-{
-    // ShowWindow(test_hwnd, SW_HIDE);
+        // 方法1：修改窗口样式
+        LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        exStyle |= WS_EX_TOOLWINDOW; // 添加工具窗口样式
+        exStyle &= ~WS_EX_APPWINDOW; // 移除应用窗口样式
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
 
-    // DWORD dwExStyle = GetWindowLong(test_hwnd, GWL_EXSTYLE);
+        // 方法2：使用TaskbarList API作为备用
+        // bool success = false;
+        ITaskbarList3 *taskbar3 = nullptr;
+        if (CreateTaskbarInterface(&taskbar3, IID_ITaskbarList3))
+        {
+            taskbar3->HrInit();
+            taskbar3->UnregisterTab(hwnd);
+            taskbar3->Release();
+            // success = true;
+        }
 
-    // dwExStyle &= ~(WS_VISIBLE);
+        // 刷新窗口显示
+        ShowWindow(hwnd, SW_HIDE);
+        ShowWindow(hwnd, SW_SHOW);
 
-    // dwExStyle |= WS_EX_TOOLWINDOW;
+        return true;
+    }
 
-    // dwExStyle &= ~(WS_EX_APPWINDOW);
+    // 显示在任务栏
+    bool ShowInTaskbar(HWND hwnd)
+    {
+        if (!hwnd)
+            return false;
 
-    // SetWindowLong(test_hwnd, GWL_EXSTYLE, WS_EX_TOOLWINDOW);
+        // 恢复窗口样式
+        LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        exStyle &= ~WS_EX_TOOLWINDOW; // 移除工具窗口样式
+        exStyle |= WS_EX_APPWINDOW;   // 添加应用窗口样式
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
 
-    // 使窗口不能获取焦点
-    // SetWindowLong(test_hwnd, GWL_EXSTYLE, GetWindowLong(test_hwnd, GWL_EXSTYLE) | WS_EX_NOACTIVATE);
+        // 使用TaskbarList API
+        ITaskbarList *taskbar = nullptr;
+        if (CreateTaskbarInterface(&taskbar, IID_ITaskbarList))
+        {
+            taskbar->HrInit();
+            taskbar->AddTab(hwnd);
+            taskbar->Release();
 
-    // DWORD dwStyle = GetWindowLong(test_hwnd, GWL_STYLE);
+            // 刷新窗口显示
+            ShowWindow(hwnd, SW_HIDE);
+            ShowWindow(hwnd, SW_SHOW);
+            return true;
+        }
 
-    // dwStyle &= ~(WS_CHILD);
+        return false;
+    }
 
-    // dwStyle |= WS_POPUP;
+    // 设置窗口为无焦点（不会抢夺焦点）
+    bool SetNoActivate(HWND hwnd)
+    {
+        if (!hwnd)
+            return false;
 
-    // SetWindowLong(test_hwnd, GWL_STYLE, WS_POPUP);
+        LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        exStyle |= WS_EX_NOACTIVATE;
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
 
-    // ShowWindow(test_hwnd, SW_SHOW);
-
-    // UpdateWindow(test_hwnd);
-
-    UnregisterTab(test_hwnd);
-
-    ShowInTaskbar(test_hwnd, FALSE);
-
-    printf("deltab worked\n");
-
-    return;
-}
+        return true;
+    }
+};
 
 struct EnumWindowsData
 {
@@ -178,12 +195,13 @@ BOOL CALLBACK EnumWindowsProc2(HWND hwnd, LPARAM lParam)
 
 std::string generateRandomCharacters(int count)
 {
-    std::string characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, characters.size() - 1);
+    static const std::string characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    static std::uniform_int_distribution<> dis(0, characters.size() - 1);
 
     std::string result;
+    result.reserve(count);
     for (int i = 0; i < count; ++i)
     {
         result += characters[dis(gen)];
@@ -192,141 +210,148 @@ std::string generateRandomCharacters(int count)
     return result;
 }
 
+// 全局对象
 webui::window my_window;
-HWND bw_hwnd;
+HWND bw_hwnd = nullptr;
+WallpaperManager wallpaper_manager;
+WindowManager window_manager;
+
+bool isHttpUrl(const std::string &url)
+{
+    return url.find("http://") == 0 || url.find("https://") == 0;
+}
+
+std::string normalizeLocalPath(const std::string &url)
+{
+    std::string normalized = url;
+
+    // 移除所有res/前缀
+    size_t res_pos = normalized.find("res/");
+    while (res_pos != std::string::npos)
+    {
+        normalized.erase(res_pos, 4);
+        res_pos = normalized.find("res/");
+    }
+
+    return normalized;
+}
 
 int funcmain()
 {
-
     std::string url = "./res/index.html";
+
     try
     {
-        const auto config = toml::parse_file("config.toml");
-        url = config["default"]["url"].value_or(url);
-        
-        if (url.empty()) {
-            throw std::runtime_error("配置文件中URL不能为空");
+        const auto config = toml::parse("config.toml");
+
+        // 使用toml::find_or来获取值，如果不存在则使用默认值
+        url = toml::find_or(config, "default", "url", url);
+
+        if (url.empty())
+        {
+            throw std::runtime_error("URL cannot be empty in config file");
         }
 
-        // 检查是否为本地路径，非HTTP/HTTPS时进行路径处理
-        if (url.find("http://") == std::string::npos && url.find("https://") == std::string::npos) {
-            // 规范化处理所有res前缀
-            size_t res_pos = url.find("res/");
-            while(res_pos != std::string::npos) {
-                url.erase(res_pos, 4);
-                res_pos = url.find("res/");
+        // 处理本地路径
+        if (!isHttpUrl(url))
+        {
+            url = normalizeLocalPath(url);
+
+            const auto base_path = std::filesystem::current_path();
+            const auto res_path = base_path / "res";
+            const auto full_path = std::filesystem::weakly_canonical(res_path / url);
+
+            // 安全检查：确保路径在res目录内
+            if (full_path.string().find(res_path.string()) != 0)
+            {
+                throw std::runtime_error("Illegal path access: " + full_path.string());
             }
 
-            std::filesystem::path base_path = std::filesystem::current_path();
-            std::filesystem::path url_path = url;
-            auto full_path = std::filesystem::weakly_canonical(base_path / "res" / url_path);
+            my_window.set_root_folder(res_path.string());
 
-            // 详细调试输出
-            // std::cout << "原始URL: " << url << std::endl;
-            // std::cout << "基础路径: " << base_path << std::endl;
-            // std::cout << "规范化路径: " << full_path << std::endl;
-            
-            // 验证路径是否在res目录内
-            if(full_path.string().find((base_path / "res").string()) != 0) {
-                throw std::runtime_error("非法路径访问: " + full_path.string());
+            // 检查文件是否存在
+            if (!std::filesystem::exists(full_path))
+            {
+                std::cerr << "Warning: File not found " << full_path << std::endl;
             }
-
-            // 设置webui根目录
-            my_window.set_root_folder((base_path / "res").string());
-            
-            // url = full_path.string();
-        }
-        
-        // 使用filesystem检查文件存在
-        if (!std::filesystem::exists(url)) {
-            std::cerr << "错误：找不到文件 " << url << std::endl;
         }
     }
     catch (const toml::exception &e)
     {
-        std::cerr << "TOML解析错误: " << e.what() << std::endl;
+        std::cerr << "TOML parsing error: " << e.what() << std::endl;
         return 1;
     }
     catch (const std::exception &e)
     {
-        std::cerr << "文件访问错误: " << e.what() << std::endl;
+        std::cerr << "File access error: " << e.what() << std::endl;
         return 1;
     }
 
-    // Check if the key exists.
-    // if (!_ini["default"].isKeyExist("url"))
-    // {
-    //     std::cout << "config.ini default.url is not exist!" << std::endl;
-    // }
+    std::cout << "Loading: " << url << std::endl;
 
-    // std::cout << "Loading : " << _ini["default"]["url"] << std::endl;
-
-    // 输出加载信息
-    std::cout << "Loading : " << url << std::endl;
-
-    // Create a window
-    // webui::window my_window;
-
-    // Bind HTML elements with C++ functions
-    // my_window.bind("MyButton1", my_function_count);
-    // my_window.bind("MyButton2", my_function_exit);
-
-    // Show the window
-    // my_window.show(my_html); // my_window.show_browser(my_html, Chrome);
-
-    // my_window.set_root_folder("res/");
-    // my_window.set_kiosk(true);
-    // my_window.show(_ini["default"]["url"]);
+    // 配置并显示窗口
     my_window.set_root_folder("res/");
     my_window.set_kiosk(true);
-    my_window.show(url); // 使用从TOML获取的URL
+    my_window.show(url);
 
-    // my_window.run("document.title=ClassPaper");
-
+    // 设置随机窗口标题
+    const std::string wname = "classpaper" + generateRandomCharacters(6);
     char response[64];
-    std::string wname = "classpaper" + generateRandomCharacters(6);
 
-    // Run JavaScript
     if (!my_window.script("document.title=\"" + wname + "\"; return \"ok\";", 0, response, 64))
     {
-
         if (!my_window.is_shown())
+        {
             std::cout << "Window closed." << std::endl;
+        }
         else
-            std::cout << "JavaScript Error: " << response << std::endl;
+        {
+            std::cout << "JavaScript error: " << response << std::endl;
+        }
     }
 
     Sleep(300);
 
-    EnumWindowsData data;
-
-    data.keyword = wname;
-
+    // 查找窗口并设置为桌面背景
+    EnumWindowsData data{wname, nullptr};
     EnumWindows(EnumWindowsProc2, reinterpret_cast<LPARAM>(&data));
 
-    if (data.hwnd != nullptr)
+    if (data.hwnd)
     {
-        std::cout << "found :  " << data.hwnd << std::endl;
-        SetDesktop(data.hwnd);
+        std::cout << "Window found: " << data.hwnd << std::endl;
+
+        // 设置为桌面壁纸
+        if (wallpaper_manager.SetAsWallpaper(data.hwnd))
+        {
+            std::cout << "Set as wallpaper successfully" << std::endl;
+        }
+
         Sleep(300);
-        deltab(data.hwnd);
-        Sleep(1000 * 5);
-        deltab(data.hwnd);
+
+        // 从任务栏隐藏
+        if (window_manager.HideFromTaskbar(data.hwnd))
+        {
+            std::cout << "Hidden from taskbar successfully" << std::endl;
+        }
+
+        // 设置为无焦点窗口
+        window_manager.SetNoActivate(data.hwnd);
+
+        Sleep(5000);
+        window_manager.HideFromTaskbar(data.hwnd); // 再次确保隐藏
         bw_hwnd = data.hwnd;
     }
     else
     {
-        std::cout << "not found" << std::endl;
+        std::cout << "Window not found" << std::endl;
     }
-
-    // Wait until all windows get closed
-    // webui::wait();
 
     return 0;
 }
 
 #include <type_traits>
 #include "res.hpp"
+#include <thread>
 
 #define WM_TRAYICON (WM_APP + 1)
 #define ID_TRAYICON 1001
@@ -337,7 +362,9 @@ int funcmain()
 #define IDM_EXIT 1004
 #define IDM_SETDESKTOP 1005
 
-class TrayIcon {
+class TrayIcon
+{
+private:
     NOTIFYICONDATA m_data{};
     HWND m_hwnd{};
 
@@ -357,46 +384,16 @@ public:
     ~TrayIcon()
     {
         Shell_NotifyIcon(NIM_DELETE, &m_data);
-    }
-
-    void ShowContextMenu() const
-    {
-        POINT pt;
-        GetCursorPos(&pt);
-
-        HMENU hMenu = CreatePopupMenu();
-        AppendMenu(hMenu, MF_STRING, IDM_RELOAD, TEXT("页面重载"));
-        AppendMenu(hMenu, MF_STRING, IDM_SETDESKTOP, TEXT("桌面穿透"));
-        AppendMenu(hMenu, MF_STRING, IDM_SETTINGS, TEXT("设置"));
-        AppendMenu(hMenu, MF_STRING, IDM_RESTART, TEXT("重启"));
-        AppendMenu(hMenu, MF_SEPARATOR, 0, NULL);
-        AppendMenu(hMenu, MF_STRING, IDM_EXIT, TEXT("退出"));
-
-        SetForegroundWindow(m_hwnd);
-        TrackPopupMenu(hMenu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, m_hwnd, NULL);
-        DestroyMenu(hMenu);
+        if (m_data.hIcon)
+        {
+            DestroyIcon(m_data.hIcon);
+        }
     }
 };
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-
-    // 获取当前可执行文件的路径
-    TCHAR szFilePath[MAX_PATH];
-    GetModuleFileName(NULL, szFilePath, MAX_PATH);
-
-    // 截取可执行文件所在的目录路径
-    std::string strDirectory(szFilePath);
-    std::size_t found;
-    std::string strSettingPath;
-    HINSTANCE hResult;
-    STARTUPINFO si;
-    PROCESS_INFORMATION pi;
-    EnumWindowsData data;
-
-    UINT WM_TASKBARCREATED;
-    // 不要修改TaskbarCreated，这是系统任务栏自定义的消息
-    WM_TASKBARCREATED = RegisterWindowMessage(TEXT("TaskbarCreated"));
+    static const UINT WM_TASKBARCREATED = RegisterWindowMessage(TEXT("TaskbarCreated"));
 
     switch (uMsg)
     {
@@ -404,7 +401,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     {
         // 初始化系统托盘
         static TrayIcon tray(hwnd);
-
         break;
     }
     case WM_COMMAND:
@@ -413,81 +409,97 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         switch (LOWORD(wParam))
         {
         case IDM_RELOAD:
-            // 页面重载逻辑
-            // MessageBox(NULL, TEXT("执行页面重载操作"), TEXT("ClassPaper"), MB_OK);
-
-            // Run JavaScript
+            std::cout << "Reloading page..." << std::endl;
             my_window.run("location.reload(true);");
 
             if (!my_window.is_shown())
-                std::cout << "Window closed." << std::endl;
-
-            Sleep(300);
-            deltab(bw_hwnd);
-
-            break;
-
-        case IDM_SETDESKTOP:
-            // 页面重载逻辑
-            // MessageBox(NULL, TEXT("执行桌面穿透操作"), TEXT("ClassPaper"), MB_OK);
-
-            if (bw_hwnd != nullptr)
             {
-                std::cout << "found :  " << bw_hwnd << std::endl;
-                SetDesktop(bw_hwnd);
-                Sleep(300);
-                deltab(bw_hwnd);
-                Sleep(1000 * 5);
-                deltab(bw_hwnd);
+                std::cout << "Window closed." << std::endl;
             }
             else
             {
-                std::cout << "not found" << std::endl;
+                Sleep(300);
+                if (bw_hwnd)
+                {
+                    window_manager.HideFromTaskbar(bw_hwnd);
+                }
             }
+            break;
 
+        case IDM_SETDESKTOP:
+            std::cout << "Setting desktop wallpaper..." << std::endl;
+
+            if (bw_hwnd)
+            {
+                if (wallpaper_manager.SetAsWallpaper(bw_hwnd))
+                {
+                    std::cout << "Set as wallpaper successfully" << std::endl;
+                    Sleep(300);
+                    window_manager.HideFromTaskbar(bw_hwnd);
+                    window_manager.SetNoActivate(bw_hwnd);
+                    Sleep(5000);
+                    window_manager.HideFromTaskbar(bw_hwnd);
+                }
+                else
+                {
+                    std::cout << "Failed to set wallpaper" << std::endl;
+                }
+            }
+            else
+            {
+                std::cout << "Window handle not found" << std::endl;
+            }
             break;
 
         case IDM_SETTINGS:
-            // 设置逻辑
-            // MessageBox(NULL, TEXT("打开设置界面"), TEXT("ClassPaper"), MB_OK);
+        {
+            std::cout << "Opening settings..." << std::endl;
 
-            std::cout << "打开设置程序..." << std::endl;
+            TCHAR szFilePath[MAX_PATH];
+            GetModuleFileName(nullptr, szFilePath, MAX_PATH);
 
-            found = strDirectory.find_last_of("/\\");
-            strDirectory = strDirectory.substr(0, found);
+            // 修改后的路径处理
+            std::filesystem::path exePath(szFilePath);
+            std::string strSettingPath = (exePath.parent_path() / "settings.exe").string();
 
-            // 构建设置程序的完整路径
-            strSettingPath = strDirectory + "\\setting.exe";
+            // 修改调用方式
+            HINSTANCE hResult = ShellExecuteW(nullptr, L"open",
+                                              std::filesystem::path(strSettingPath).wstring().c_str(),
+                                              nullptr, nullptr, SW_SHOWDEFAULT);
 
-            // 调用 ShellExecute 函数运行设置程序
-            hResult = ShellExecute(NULL, "open", strSettingPath.c_str(), NULL, NULL, SW_SHOWDEFAULT);
-
-            if (static_cast<int>(reinterpret_cast<intptr_t>(hResult)) <= 32)
+            if (reinterpret_cast<intptr_t>(hResult) <= 32)
             {
-                std::cerr << "无法打开设置程序！错误代码：" << static_cast<int>(reinterpret_cast<intptr_t>(hResult)) << std::endl;
+                std::cerr << "Failed to open settings! Error code: "
+                          << reinterpret_cast<intptr_t>(hResult) << std::endl;
             }
-
             break;
+        }
         case IDM_RESTART:
-            // 重启逻辑
-            // MessageBox(NULL, TEXT("执行重启操作"), TEXT("ClassPaper"), MB_OK);
+        {
+            std::cout << "Restarting program..." << std::endl;
 
-            std::cout << "执行重启操作..." << std::endl;
+            TCHAR szFilePath[MAX_PATH];
+            GetModuleFileName(nullptr, szFilePath, MAX_PATH);
 
-            // 创建新进程来执行重启操作
-            si = {sizeof(si)};
-            if (CreateProcess(szFilePath, NULL, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+            STARTUPINFO si = {sizeof(si)};
+            PROCESS_INFORMATION pi;
+
+            if (CreateProcess(szFilePath, nullptr, nullptr, nullptr, FALSE, 0,
+                              nullptr, nullptr, &si, &pi))
             {
                 CloseHandle(pi.hThread);
                 CloseHandle(pi.hProcess);
+                std::cout << "Program restarted successfully" << std::endl;
+            }
+            else
+            {
+                std::cout << "Failed to restart program" << std::endl;
             }
 
-            Shell_NotifyIcon(NIM_DELETE, &g_notifyIconData);
             PostQuitMessage(0);
             break;
+        }
         case IDM_EXIT:
-            // 退出逻辑
-            Shell_NotifyIcon(NIM_DELETE, &g_notifyIconData);
             PostQuitMessage(0);
             break;
         }
@@ -496,66 +508,62 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     }
     case WM_TRAYICON:
     {
-        // 处理托盘图标消息
-        if (LOWORD(lParam) == WM_RBUTTONDOWN)
+        switch (LOWORD(lParam))
         {
-            // 弹出右键菜单
+        case WM_RBUTTONUP: // 使用RBUTTONUP而不是RBUTTONDOWN，响应更快
+        {
             POINT cursorPos;
             GetCursorPos(&cursorPos);
 
-            // deltab(bw_hwnd);
-
             HMENU hPopupMenu = CreatePopupMenu();
-            AppendMenu(hPopupMenu, MF_STRING, IDM_RELOAD, TEXT("页面重载"));
-            AppendMenu(hPopupMenu, MF_STRING, IDM_SETDESKTOP, TEXT("桌面穿透"));
-            AppendMenu(hPopupMenu, MF_STRING, IDM_SETTINGS, TEXT("设置"));
-            AppendMenu(hPopupMenu, MF_STRING, IDM_RESTART, TEXT("重启"));
-            AppendMenu(hPopupMenu, MF_SEPARATOR, 0, NULL);
-            AppendMenu(hPopupMenu, MF_STRING, IDM_EXIT, TEXT("退出"));
+            if (hPopupMenu)
+            {
+                // 快速构建菜单
+                AppendMenu(hPopupMenu, MF_STRING, IDM_RELOAD, TEXT("页面重载"));
+                AppendMenu(hPopupMenu, MF_STRING, IDM_SETDESKTOP, TEXT("桌面穿透"));
+                AppendMenu(hPopupMenu, MF_STRING, IDM_SETTINGS, TEXT("设置"));
+                AppendMenu(hPopupMenu, MF_SEPARATOR, 0, nullptr);
+                AppendMenu(hPopupMenu, MF_STRING, IDM_RESTART, TEXT("重启"));
+                AppendMenu(hPopupMenu, MF_STRING, IDM_EXIT, TEXT("退出"));
 
-            SetForegroundWindow(hwnd);
-            TrackPopupMenu(hPopupMenu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, cursorPos.x, cursorPos.y, 0, hwnd, NULL);
-            PostMessage(hwnd, WM_NULL, 0, 0);
+                // 优化菜单显示 - 减少延迟
+                SetForegroundWindow(hwnd);
+
+                // 使用同步模式和优化的标志
+                UINT result = TrackPopupMenu(hPopupMenu,
+                                             TPM_LEFTALIGN | TPM_TOPALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
+                                             cursorPos.x, cursorPos.y, 0, hwnd, nullptr);
+
+                DestroyMenu(hPopupMenu);
+
+                // 如果用户选择了菜单项，直接处理
+                if (result != 0)
+                {
+                    SendMessage(hwnd, WM_COMMAND, result, 0);
+                }
+            }
+            break;
         }
-        else if (LOWORD(lParam) == WM_LBUTTONDOWN)
+        case WM_LBUTTONDOWN:
         {
-            // 弹出右键菜单
-            POINT cursorPos;
-            GetCursorPos(&cursorPos);
-
-            // deltab(bw_hwnd);
-
-            HMENU hPopupMenu = CreatePopupMenu();
-            AppendMenu(hPopupMenu, MF_STRING, IDM_RELOAD, TEXT("页面重载"));
-            AppendMenu(hPopupMenu, MF_STRING, IDM_SETDESKTOP, TEXT("桌面穿透"));
-            AppendMenu(hPopupMenu, MF_STRING, IDM_SETTINGS, TEXT("设置"));
-            AppendMenu(hPopupMenu, MF_STRING, IDM_RESTART, TEXT("重启"));
-            AppendMenu(hPopupMenu, MF_SEPARATOR, 0, NULL);
-            AppendMenu(hPopupMenu, MF_STRING, IDM_EXIT, TEXT("退出"));
-
-            SetForegroundWindow(hwnd);
-            TrackPopupMenu(hPopupMenu, TPM_LEFTALIGN | TPM_RIGHTBUTTON, cursorPos.x, cursorPos.y, 0, hwnd, NULL);
-            PostMessage(hwnd, WM_NULL, 0, 0);
+            // 左键单击也显示菜单
+            PostMessage(hwnd, WM_TRAYICON, wParam, MAKELPARAM(WM_RBUTTONUP, HIWORD(lParam)));
+            break;
         }
-
+        case WM_LBUTTONDBLCLK:
+        {
+            // 双击重新加载
+            SendMessage(hwnd, WM_COMMAND, IDM_RELOAD, 0);
+            break;
+        }
+        }
         break;
     }
     case WM_DESTROY:
-    {
-        // 移除托盘图标并退出应用程序
-        Shell_NotifyIcon(NIM_DELETE, &g_notifyIconData);
         PostQuitMessage(0);
-
         break;
-    }
     default:
-        /*
-         * 防止当Explorer.exe 崩溃以后，程序在系统系统托盘中的图标就消失
-         *
-         * 原理：Explorer.exe 重新载入后会重建系统任务栏。当系统任务栏建立的时候会向系统内所有
-         * 注册接收TaskbarCreated 消息的顶级窗口发送一条消息，我们只需要捕捉这个消息，并重建系
-         * 统托盘的图标即可。
-         */
+        // 防止Explorer.exe崩溃后托盘图标消失
         if (uMsg == WM_TASKBARCREATED)
             SendMessage(hwnd, WM_CREATE, wParam, lParam);
         break;
@@ -564,6 +572,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
     return DefWindowProc(hwnd, uMsg, wParam, lParam);
 }
 
+// 在 WinMain 函数中调整初始化顺序
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
     // 注册窗口类
@@ -573,10 +582,22 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.lpszClassName = TEXT("TrayMenu");
     RegisterClass(&wc);
 
-    CreateWindowEx(0, wc.lpszClassName, TEXT(""), 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    // 注册窗口类后添加
+    std::cout << "[系统] 窗口类注册完成，开始创建消息窗口..." << std::endl;
+    HWND hWnd = CreateWindowEx(0, wc.lpszClassName, TEXT(""), 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+    if (!hWnd) {
+        std::cerr << "[错误] 无法创建消息窗口! 错误代码: " << GetLastError() << std::endl;
+        return 1;
+    }
+    std::cout << "[系统] 消息窗口已创建，句柄: " << hWnd << std::endl;
 
-    funcmain();
+    // 在独立线程中运行主逻辑
+    std::thread mainThread([](){
+        funcmain();
+    });
+    mainThread.detach();  // 分离线程避免阻塞消息循环
 
+    // 立即进入消息循环
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0))
     {
@@ -585,6 +606,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     }
 
     webui::exit();
-
     return static_cast<int>(msg.wParam);
 }
