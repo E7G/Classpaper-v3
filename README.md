@@ -6,6 +6,22 @@
 
 ClassPaper 是一个专为学生设计的桌面课表应用，将课程表以美观的方式显示在桌面背景上。应用采用现代 Web 技术构建界面，通过 C++ 后端实现桌面集成，提供流畅的用户体验和丰富的自定义功能。
 
+
+## 主页界面
+
+![index-day](res/screenshots/index-day.jpeg "主页-一天模式")
+![index-scroll](res/screenshots/index-scroll.jpeg "主页-滚动模式")
+
+## 设置界面
+
+![setting-base](res/screenshots/setting-base.jpeg "设置-基础设置")
+![setting-lessons](res/screenshots/setting-lessons.jpeg "设置-课程表设置")
+![setting-event](res/screenshots/setting-event.jpeg "设置-事件设置")
+![setting-wallpaper](res/screenshots/setting-wallpaper.jpeg "设置-壁纸设置")
+![setting-sth](res/screenshots/setting-sth.jpeg "设置-告示设置")
+
+
+
 ## 主要特性
 
 ### 🎯 核心功能
@@ -271,3 +287,5 @@ A: 编辑 `res/config/config.js` 文件中的课程安排配置。
 - [TOML11](https://github.com/ToruNiina/toml11) - 现代 C++ TOML 解析库
 - [Pico CSS](https://picocss.com/) - 轻量级 CSS 框架
 - [实现桌面动态壁纸（一）\_动态壁纸原理-CSDN博客](https://blog.csdn.net/qq_59075481/article/details/125361650) - 提供桌面壁纸实现原理
+- [Candlest](https://github.com/Candlest) - 提供前端文件基础 [ClassBoard-F8](https://candlest.github.io/ClassBoard-F8)
+- [mike-unk](https://github.com/mike-unk) - 提供前端文件基础及修改建议
